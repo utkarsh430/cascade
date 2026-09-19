@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Thirty-one records. Each states the decision, the evidence behind it, and
+Thirty-two records, one of them proposed. Each states the decision, the evidence behind it, and
 what it costs. They exist because this project's specification is detailed
 enough to be wrong in specific, checkable ways — and when it was, the record
 says so with the measurement that showed it.
@@ -41,3 +41,4 @@ this build. The rest record a choice the specification left open.
 | [0029](0029-api-providers-share-one-cache-namespace.md) | The API providers share one cache namespace — conditional on a measured equivalence probe | M10 |
 | [0030](0030-knowledge-bases-rejected-guardrails-deferred.md) | Bedrock Knowledge Bases rejected: a managed KB cannot enforce the time lock. Guardrails deferred: no path through the one door | M10 |
 | [0031](0031-claude-code-cli-provider.md) | A Claude Code CLI provider under a subscription, keyed apart because it cannot honour `temperature` or `max_tokens` | M10 |
+| [0032](0032-live-mode-intake-snapshot.md) | **Proposed.** Live mode: forward questions forecast from a frozen intake snapshot, kept out of the backtest corpus, with prospective scoring | M13 |

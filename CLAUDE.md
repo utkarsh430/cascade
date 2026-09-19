@@ -191,7 +191,7 @@ cascade trace cost         # §12.4: reconcile the run ledger against Langfuse
 
 ## 7. Architecture decisions
 
-Thirty-one ADRs in `docs/adr/`. Fifteen correct defects found in the spec,
+Thirty-two ADRs in `docs/adr/` (0032 proposed). Fifteen correct defects found in the spec,
 and 0023, 0025 and 0026 correct defects found in **this build** -- an ingest order
 that satisfied every criterion while covering the wrong years, and two ablation
 factors that were configured, documented and inert. The rest record choices the
@@ -230,6 +230,7 @@ spec left open.
 | 0029 | The three API providers share one cache namespace — the key carries the logical model, the wire id is rendered at the boundary — *conditional* on `cascade eval equivalence`, which bootstraps cross-provider against within-provider disagreement | M10 |
 | 0030 | Bedrock Knowledge Bases rejected: a managed KB cannot enforce the `as_of` time lock the leakage suite verifies. Bedrock Guardrails deferred: the SDK's Bedrock client has no guardrail parameter, and `ApplyGuardrail` would be a second door | M10 |
 | 0031 | A Claude Code CLI provider for local runs under a subscription, keyed apart because it cannot honour `temperature` or `max_tokens`; measured 448-token harness overhead, thinking on by default, and a working-directory guard against auto-loading this file into every call | M10 |
+| 0032 | **Proposed.** Live mode for forward questions: two intake rounds frozen into a content-addressed snapshot before any simulation step; agents never search; snapshots never enter the backtest corpus (131 of 180 sealed cutoffs fall in the last 18 months); prospective scoring through a registry whose resolutions only `cascade_eval` reads; live replicate count from the convergence curve against a threshold fixed in advance | M13 |
 
 ---
 
@@ -256,6 +257,17 @@ identical across cells and reproducible from the salt.
 ensemble-contribution estimate therefore states the replicate count it was
 measured at, in the report, rather than leaving a reader to infer it from a run
 count.
+
+**Q3 (M13): live mode for forward questions. — PLANNED, ADR-0032 proposed
+(2026-09-19).** The spec is a backtest system; a product answers questions
+whose cutoff is *now*. This extends the spec's scope and is flagged as such.
+Backtest mode stays the validation instrument, unchanged. Live mode freezes a
+content-addressed intake snapshot before any simulation step and registers
+every forecast for prospective scoring. The open risk is transfer: backtest
+skill is measured on time-locked, crawl-derived evidence and live mode feeds
+search-ranked evidence, so a backtest Brier is **never** quoted as the live
+product's accuracy. Resolve before M13 starts: accept ADR-0032, which fixes the
+live replicate-count threshold before the convergence curve is measured.
 
 **Q2 (M1): base-rate control vs. the other inclusion rules. — RESOLVED at M1,
 see ADR-0008.** Precedence, weakest sacrificed first: (1) eligibility is
