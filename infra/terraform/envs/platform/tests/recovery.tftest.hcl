@@ -1,4 +1,4 @@
-# The event lake, offline: invariant 6 (append-only) as AWS controls.
+# Tier-0 recovery, offline: locked, replicated, and closed to the simulation.
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
     defaults = { account_id = "123456789012" }
@@ -58,8 +58,6 @@ mock_provider "aws" {
   }
 }
 
-# The root module declares aws.replica; a test file that mocks any provider
-# replaces them all, so every file in this root must supply both.
 mock_provider "aws" {
   alias = "replica"
   mock_data "aws_caller_identity" {
@@ -120,129 +118,60 @@ mock_provider "aws" {
   }
 }
 
+# Tested through the root: see the `controls` output in modules/recovery.
 variables {
-  name          = "t"
-  bucket_suffix = "123456789012-us-east-1"
-  kms_key_arn   = "arn:aws:kms:us-east-1:123456789012:key/mock"
+  region                       = "us-east-1"
+  replica_region               = "us-west-2"
+  infrastructure_allowance_usd = 50
 }
 
-run "the_log_is_locked_versioned_and_private" {
+run "both_buckets_are_locked_in_different_regions" {
   command = plan
-  module {
-    source = "../../modules/eventlake"
-  }
 
   assert {
-    condition     = aws_s3_bucket.events.object_lock_enabled
-    error_message = "The events bucket must have Object Lock: the log is append-only (invariant 6)."
+    condition     = module.recovery.controls.primary_locked && module.recovery.controls.replica_locked
+    error_message = "Primary and replica must both have Object Lock."
   }
   assert {
-    condition     = one(one(aws_s3_bucket_object_lock_configuration.events.rule).default_retention).days == 365
-    error_message = "Every object must get a default retention."
-  }
-  assert {
-    condition     = one(aws_s3_bucket_versioning.events.versioning_configuration).status == "Enabled"
-    error_message = "Object Lock requires versioning."
-  }
-  assert {
-    condition = alltrue([
-      aws_s3_bucket_public_access_block.events.block_public_acls,
-      aws_s3_bucket_public_access_block.events.block_public_policy,
-      aws_s3_bucket_public_access_block.events.ignore_public_acls,
-      aws_s3_bucket_public_access_block.events.restrict_public_buckets,
-    ])
-    error_message = "Every public-access block must be on."
+    condition     = endswith(module.recovery.controls.primary_bucket, "us-east-1") && endswith(module.recovery.controls.replica_bucket, "us-west-2")
+    error_message = "The replica must live in the second region."
   }
 }
 
-run "the_writer_can_append_and_is_explicitly_denied_everything_destructive" {
+run "a_delete_in_the_primary_does_not_reach_the_replica" {
   command = plan
-  module {
-    source = "../../modules/eventlake"
-  }
 
   assert {
-    condition = length([
-      for s in data.aws_iam_policy_document.writer.statement : s
-      if s.effect == "Deny" && length(setsubtract(
-        ["s3:DeleteObject", "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention", "s3:PutObjectRetention"],
-        s.actions
-      )) == 0
-    ]) == 1
-    error_message = "The writer must carry an explicit Deny on delete and on every lock override."
-  }
-  assert {
-    condition = length([
-      for s in data.aws_iam_policy_document.writer.statement : s
-      if s.effect != "Deny" && length([for a in s.actions : a if startswith(a, "s3:") && a != "s3:PutObject"]) > 0
-    ]) == 0
-    error_message = "The writer's only S3 permission is PutObject."
+    condition     = module.recovery.controls.delete_markers_replicate == "Disabled"
+    error_message = "Replicating delete markers would carry an accidental deletion to the copy that exists to survive it."
   }
 }
 
-run "no_statement_in_either_role_is_granted_on_everything" {
-  # apply, not plan: the resource lists hold ARNs that are unknown until then.
-  command = apply
-  module {
-    source = "../../modules/eventlake"
-  }
-
-  assert {
-    condition = length([
-      for s in concat(data.aws_iam_policy_document.writer.statement, data.aws_iam_policy_document.analyst.statement) : s
-      if s.effect != "Deny" && contains(s.resources, "*")
-    ]) == 0
-    error_message = "Every allow in the lake's roles must name its resources."
-  }
-}
-
-run "queries_cannot_escape_the_workgroup_settings" {
+run "the_simulation_is_denied_the_labels_archive" {
   command = plan
-  module {
-    source = "../../modules/eventlake"
+  variables {
+    simulation_principal_arns = ["arn:aws:iam::123456789012:role/cascade-sim"]
   }
 
   assert {
-    condition     = one(aws_athena_workgroup.this.configuration).enforce_workgroup_configuration
-    error_message = "Workgroup settings must override client settings."
+    condition     = contains(module.recovery.controls.deny_statements, "SimulationNeverReadsLabels")
+    error_message = "Invariant 2 on a bucket: an explicit Deny on registry/* for the simulation's principals."
   }
   assert {
-    condition     = one(aws_athena_workgroup.this.configuration).bytes_scanned_cutoff_per_query == 10737418240
-    error_message = "Every query must carry a scan limit."
-  }
-  assert {
-    condition     = one(one(one(aws_athena_workgroup.this.configuration).result_configuration).encryption_configuration).encryption_option == "SSE_KMS"
-    error_message = "Query results must be encrypted with the CMK."
+    condition     = contains(module.recovery.controls.labels_deny_actions, "s3:GetObject")
+    error_message = "The Deny must cover reading the archive."
   }
 }
 
-run "the_catalog_matches_the_events_table" {
+run "with_no_simulation_principal_there_is_no_empty_deny" {
   command = plan
-  module {
-    source = "../../modules/eventlake"
-  }
 
   assert {
-    condition = [for c in one(aws_glue_catalog_table.events.storage_descriptor).columns : c.name] == [
-      "run_id", "step", "seq", "actor_id", "obs_hash", "action", "caused_by",
-      "factor_delta", "cache_hit", "tokens_in", "tokens_out", "latency_ms", "coercion",
-    ]
-    error_message = "The lake's columns must be migration 009's, in order."
+    condition     = !contains(module.recovery.controls.deny_statements, "SimulationNeverReadsLabels")
+    error_message = "A Deny with no principals is an invalid policy; it must be omitted."
   }
   assert {
-    condition     = [for k in aws_glue_catalog_table.events.partition_keys : k.name] == ["config_id"]
-    error_message = "Partitioned by ablation cell."
-  }
-}
-
-run "compliance_mode_is_available_but_never_the_default" {
-  command = plan
-  module {
-    source = "../../modules/eventlake"
-  }
-
-  assert {
-    condition     = one(one(aws_s3_bucket_object_lock_configuration.events.rule).default_retention).mode == "GOVERNANCE"
-    error_message = "COMPLIANCE cannot be undone by anyone; it must be chosen, not inherited."
+    condition     = contains(module.recovery.controls.deny_statements, "TlsOnly")
+    error_message = "The TLS-only Deny is unconditional."
   }
 }
